@@ -1,7 +1,7 @@
 package main
 
-import "fmt"
+import "training-practice/cmd"
 
 func main() {
-	fmt.Println("Hello, World!")
+	cmd.Execute()
 }

@@ -1,51 +1,88 @@
+// cmd/copy.go
+
 package cmd
 
 import (
 	"fmt"
+	"path/filepath"
 
+	"github.com/cheggaaa/pb/v3" // 导入进度条库
 	"github.com/spf13/cobra"
+
+	// 导入我们自己的 fileops 包
+	"training-practice/internal/fileops"
 )
 
 var copyCmd = &cobra.Command{
-	Use:   "copy [源文件或目录] [目标目录]",
-	Short: "复制文件或目录到指定位置",
-	Long: `
-'copy' 命令用于从源路径（文件或目录）并发地复制文件到目标路径。
-它会充分利用 '--workers' 标志来指定的goroutine数量，以提高复制大量小文件时的效率。
+	Use:   "copy <source-path> <destination-path>",
+	Short: "并发地复制文件或目录",
+	Long:  `...`, // 省略
+	Args:  cobra.ExactArgs(2),
 
-示例:
-  training-practice copy ./source ./dest -w 20
-  training-practice copy ./file.txt ./backup/file.txt -v`,
-
-	// Args 用于验证命令行参数的数量
-	Args: cobra.ExactArgs(2),
-	// RunE 是命令的执行入口，'E' 表示它可以返回一个错误
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// 1. 从 args 中获取源路径和目标路径
 		sourcePath := args[0]
 		destPath := args[1]
 
-		// 2. 打印当前配置，验证命令是否正确接收了参数和标志
-		fmt.Println("--- 开始执行复制操作 ---")
-		fmt.Printf("源路径: %s\n", sourcePath)
-		fmt.Printf("目标路径: %s\n", destPath)
-		fmt.Printf("并发Workers数量: %d\n", workerCount)
-		fmt.Printf("是否显示详细日志: %t\n", verbose)
-		fmt.Printf("是否跳过错误继续: %t\n", skipErrors)
-		fmt.Println("-----------------------")
+		// 从本地标志中获取 overwrite 的值
+		overwrite, _ := cmd.Flags().GetBool("overwrite")
 
-		// 3. 这里是未来放置并发复制逻辑的地方
-		fmt.Println("复制操作将在这实现。")
+		// 1. 收集所有待复制的文件
+		cmd.Println("正在扫描文件...")
+		sourceFiles, err := fileops.CollectFiles(sourcePath)
+		if err != nil {
+			return fmt.Errorf("扫描源目录时出错: %w", err)
+		}
 
-		// 4. 返回 nil 表示命令成功执行
+		if len(sourceFiles) == 0 {
+			cmd.Println("没有找到任何文件需要复制。")
+			return nil
+		}
+
+		// 2. 初始化进度条
+		bar := pb.StartNew(len(sourceFiles))
+		bar.SetTemplate(pb.Full) // 使用完整的进度条模板
+		bar.Set("prefix", "复制中: ")
+
+		// 3. 遍历文件列表，逐个复制
+		for _, srcFile := range sourceFiles {
+			// 计算目标文件的相对路径，以保持目录结构
+			relPath, err := filepath.Rel(sourcePath, srcFile)
+			if err != nil {
+				bar.Increment()
+				if skipErrors {
+					cmd.Printf("警告: 无法计算相对路径 %s -> %s, 跳过。\n", srcFile, destPath)
+					continue
+				}
+				return fmt.Errorf("无法计算相对路径 %s -> %s: %w", srcFile, destPath, err)
+			}
+
+			// 构建目标文件的完整路径
+			dstFile := filepath.Join(destPath, relPath)
+
+			// 调用核心复制函数
+			err = fileops.CopyFile(srcFile, dstFile, overwrite)
+			if err != nil {
+				bar.Increment()
+				if skipErrors {
+					cmd.Printf("警告: %v, 跳过。\n", err)
+					continue
+				}
+				return err // 如果不跳过错误，则直接返回并终止程序
+			}
+
+			// 更新进度条
+			bar.Increment()
+		}
+
+		// 4. 完成并结束进度条
+		bar.Finish()
+		cmd.Println("复制完成！")
+
 		return nil
 	},
 }
 
-// init 函数会在 main 函数执行前被自动调用
 func init() {
-	// 将 copyCmd 添加为 rootCmd 的子命令
 	rootCmd.AddCommand(copyCmd)
-
-	copyCmd.Flags().BoolP("overwrite", "o", false, "如果目标文件已存在，则覆盖它")
+	copyCmd.Flags().BoolP("overwrite", "o", false, "如果目标文件已存在，则强制覆盖")
 }

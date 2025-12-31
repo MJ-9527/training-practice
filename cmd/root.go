@@ -16,7 +16,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "training-practice",
 	Short: "一个高性能的并发文件批量处理工具",
-	Long: `FileBatch 是一个用Go编写的命令行工具，旨在利用goroutine和channel的强大能力，
+	Long: `training-practice 是一个用Go编写的命令行工具，旨在利用goroutine和channel的强大能力，
 对大量文件进行快速、高效的批量操作，如复制、移动、重命名和校验。`,
 }
 

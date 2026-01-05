@@ -29,3 +29,7 @@ func CollectFiles(rootDir string) ([]string, error) {
 
 	return fileList, nil
 }
+
+func Dir(path string) string {
+	return filepath.Dir(path)
+}

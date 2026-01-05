@@ -3,6 +3,7 @@
 package workerpool
 
 import (
+	"fmt"
 	"sync"
 
 	// 导入我们的文件操作包
@@ -34,17 +35,26 @@ func NewWorkerPool(workerCount, bufferSize int) *WorkerPool {
 	return wp
 }
 
-// worker 是一个工作goroutine，它从TaskChan接收任务并执行。
 func (wp *WorkerPool) worker() {
-	defer wp.wg.Done() // 当worker退出时，通知WaitGroup
+	defer wp.wg.Done()
 
-	// 无限循环，从TaskChan接收任务
 	for task := range wp.TaskChan {
 		var result Result
 		result.Task = task
+		var err error
 
-		// 调用核心的文件复制函数
-		err := fileops.CopyFile(task.SourcePath, task.DestPath, true) // 假设overwrite逻辑在分发任务时已确定
+		// 根据任务类型分发到不同的操作函数
+		switch task.Type {
+		case TaskTypeCopy:
+			err = fileops.CopyFile(task.SourcePath, task.DestPath, result.Task.Overwrite)
+		case TaskTypeMove:
+			err = fileops.MoveFile(task.SourcePath, task.DestPath, result.Task.Overwrite)
+		case TaskTypeRename:
+			err = fileops.RenameFile(task.SourcePath, task.DestPath, result.Task.Overwrite)
+		default:
+			err = fmt.Errorf("未知的任务类型: %s", task.Type)
+		}
+
 		if err != nil {
 			result.Success = false
 			result.Error = err
@@ -52,7 +62,6 @@ func (wp *WorkerPool) worker() {
 			result.Success = true
 		}
 
-		// 将执行结果发送到ResultChan
 		wp.ResultChan <- result
 	}
 }

@@ -7,18 +7,15 @@ package workerpool
 type Task struct {
 	SourcePath string
 	DestPath   string
-	// 可以扩展 OpType 字段，以支持未来的 move, rename 等操作
-	// OpType     string
+	Type       TaskType
+	Overwrite  bool
 }
 
 // Result 定义了一个任务执行后的结果。
 type Result struct {
-	Task       Task  // 关联的任务
-	Success    bool  // 是否成功
-	Error      error // 如果失败，记录错误信息
-	Type       TaskType
-	SourcePath string
-	DestPath   string
+	Task    Task  // 关联的任务
+	Success bool  // 是否成功
+	Error   error // 如果失败，记录错误信息
 }
 
 type TaskType string

@@ -8,10 +8,13 @@ import (
 	"sync"
 
 	"github.com/cheggaaa/pb/v3"
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 
 	"training-practice/internal/fileops"
 	"training-practice/internal/workerpool" // 导入workerpool包
+
+	"github.com/schollz/progressbar/v3"
 )
 
 var copyCmd = &cobra.Command{
@@ -23,7 +26,7 @@ var copyCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sourcePath := args[0]
 		destPath := args[1]
-		//overwrite, _ := cmd.Flags().GetBool("overwrite")
+		overwrite, _ := cmd.Flags().GetBool("overwrite")
 
 		// 1. 收集所有待复制的文件
 		cmd.Println("正在扫描文件...")
@@ -47,7 +50,11 @@ var copyCmd = &cobra.Command{
 		bar.SetTemplate(pb.Full)
 		bar.Set("prefix", "并发复制中: ")
 
+		totalFiles := len(sourceFiles)
+		bar := progressbar.Default(int64(totalFiles), "正在复制...")
+
 		var successCount, failCount int
+		var filedFiles []string
 		var mu sync.Mutex // 用于保护对计数器和进度条的并发访问
 
 		// 4. 启动一个goroutine来消费结果
@@ -86,6 +93,7 @@ var copyCmd = &cobra.Command{
 			task := workerpool.Task{
 				SourcePath: srcFile,
 				DestPath:   dstFile,
+				Overwrite:  overwrite,
 			}
 			pool.TaskChan <- task
 		}

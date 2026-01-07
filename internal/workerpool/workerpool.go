@@ -51,6 +51,13 @@ func (wp *WorkerPool) worker() {
 			err = fileops.MoveFile(task.SourcePath, task.DestPath, result.Task.Overwrite)
 		case TaskTypeRename:
 			err = fileops.RenameFile(task.SourcePath, task.DestPath, result.Task.Overwrite)
+		case TaskTypeChecksum:
+			checksum, err := fileops.CalculateChecksum(task.SourcePath, task.Algorithm)
+			if err == nil {
+				result.Error = nil
+			} else {
+				result.Message = checksum
+			}
 		default:
 			err = fmt.Errorf("未知的任务类型: %s", task.Type)
 		}

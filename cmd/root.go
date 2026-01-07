@@ -1,3 +1,4 @@
+// cmd/root.go
 package cmd
 
 import (
@@ -5,30 +6,77 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var (
-	workerCount int
+	cfgFile     string
 	verbose     bool
-	skipErrors  bool
+	workerCount int // 从配置文件读取默认值
 )
 
+// rootCmd 是基础命令
 var rootCmd = &cobra.Command{
-	Use:   "training-practice",
-	Short: "一个高性能的并发文件批量处理工具",
-	Long: `training-practice 是一个用Go编写的命令行工具，旨在利用goroutine和channel的强大能力，
-对大量文件进行快速、高效的批量操作，如复制、移动、重命名和校验。`,
+	Use:   "filebatch",
+	Short: "高并发文件批量处理工具",
+	Long: `filebatch 是一个支持并发复制、移动、重命名和校验和计算的命令行工具，
+旨在提高文件操作效率，支持跨平台使用。`,
+	// 初始化配置（在子命令执行前）
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		initConfig()
+		// 优先级：命令行参数 > 配置文件 > 环境变量 > 默认值
+		viper.BindPFlag("workers", cmd.Flags().Lookup("workers"))
+		viper.BindPFlag("verbose", cmd.Flags().Lookup("verbose"))
+		// 读取配置到全局变量
+		workerCount = viper.GetInt("workers")
+		verbose = viper.GetBool("verbose")
+	},
 }
 
-// Execute 将所有子命令添加到根命令并设置标志。
-func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+// 初始化配置
+func initConfig() {
+	// 1. 配置文件路径优先级：命令行指定 > 默认路径
+	if cfgFile != "" {
+		viper.SetConfigFile(cfgFile)
+	} else {
+		// 默认配置文件路径：~/.filebatch.yaml
+		home, err := os.UserHomeDir()
+		cobra.CheckErr(err)
+		viper.AddConfigPath(home)         // 搜索 ~ 目录
+		viper.SetConfigName(".filebatch") // 配置文件名（无后缀）
+		viper.SetConfigType("yaml")       // 配置文件类型
+	}
+
+	// 2. 支持环境变量（前缀：FILEBATCH_，如 FILEBATCH_WORKERS=8）
+	viper.AutomaticEnv()
+	viper.SetEnvPrefix("FILEBATCH")
+
+	// 3. 设置默认值
+	viper.SetDefault("workers", 4)                   // 默认并发数：4
+	viper.SetDefault("verbose", false)               // 默认不开启详细模式
+	viper.SetDefault("checksum.algorithm", "sha256") // 默认校验和算法
+
+	// 4. 读取配置文件（如果存在）
+	if err := viper.ReadInConfig(); err == nil {
+		if verbose {
+			fmt.Printf("使用配置文件：%s\n", viper.ConfigFileUsed())
+		}
 	}
 }
+
+// 初始化全局标志
 func init() {
-	rootCmd.PersistentFlags().IntVarP(&workerCount, "workers", "w", 10, "设置并发工作的goroutine数量")
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "显示详细的执行过程")
-	rootCmd.PersistentFlags().BoolVarP(&skipErrors, "skip-errors", "s", false, "遇到错误时跳过并继续处理")
+	// 配置文件相关标志
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "指定配置文件路径（默认：~/.filebatch.yaml）")
+	// 通用标志（所有子命令可继承）
+	rootCmd.PersistentFlags().IntVarP(&workerCount, "workers", "w", 0, "并发工作线程数（默认：4，可通过配置文件修改）")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "开启详细日志输出")
+}
+
+// Execute 启动命令行工具
+func Execute() {
+	err := rootCmd.Execute()
+	if err != nil {
+		os.Exit(1)
+	}
 }

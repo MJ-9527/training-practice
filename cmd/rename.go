@@ -1,120 +1,78 @@
-// cmd/rename.go
-
 package cmd
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 
-	"training-practice/internal/fileops"
-	"training-practice/internal/workerpool"
-
-	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
 
+var (
+	oldName string // 原文件路径/名称
+	newName string // 新文件路径/名称
+	force   bool   // 强制重命名（覆盖已存在的新名称）
+)
+
+// renameCmd 重命名文件
 var renameCmd = &cobra.Command{
-	Use:     "rename <source-path> <new-name-or-directory>",
-	Aliases: []string{"rn"}, // 添加别名
-	Short:   "并发地重命名文件或移动到新目录",
-	Long: `
-'rename' 命令用于对源路径下的所有文件进行并发处理。
-如果目标是一个已存在的目录，文件将被移动到该目录。
-如果目标是一个新名称且源路径是单个文件，则该文件将被重命名。`,
-	Args: cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		sourcePath := args[0]
-		destPath := args[1]
-
-		cmd.Println("正在扫描源文件...")
-		sourceFiles, err := fileops.CollectFiles(sourcePath)
-		if err != nil {
-			return fmt.Errorf("扫描源目录时出错: %w", err)
+	Use:   "rename",
+	Short: "重命名文件（或修改文件路径）",
+	Long:  `修改文件的名称或路径，支持强制覆盖已存在的同名文件`,
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := renameFile(); err != nil {
+			fmt.Fprintf(os.Stderr, "重命名文件失败: %v\n", err)
+			os.Exit(1)
 		}
-
-		totalFiles := len(sourceFiles)
-		if totalFiles == 0 {
-			cmd.Println("没有找到任何文件需要处理。")
-			return nil
-		}
-
-		// 检查目标路径是否为已存在的目录
-		destInfo, err := os.Stat(destPath)
-		isDestDir := err == nil && destInfo.IsDir()
-
-		pool := workerpool.NewWorkerPool(workerCount, totalFiles)
-
-		bar := progressbar.Default(int64(totalFiles), "正在处理...")
-
-		var wg sync.WaitGroup
-		var successCount, failCount int
-		var failedFiles []string
-		var mu sync.Mutex
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for res := range pool.ResultChan {
-				bar.Add(1)
-				mu.Lock()
-				if res.Success {
-					successCount++
-				} else {
-					failCount++
-					failedFiles = append(failedFiles, res.Task.SourcePath)
-					if verbose {
-						cmd.Printf("ERROR: %s: %v\n", res.Task.SourcePath, res.Error)
-					}
-				}
-				mu.Unlock()
-			}
-		}()
-
-		for _, srcFile := range sourceFiles {
-			var newPath string
-			if isDestDir {
-				// 如果目标是目录，则移动文件到该目录
-				fileName := filepath.Base(srcFile)
-				newPath = filepath.Join(destPath, fileName)
-			} else if totalFiles == 1 {
-				// 如果只有一个源文件且目标不是目录，则重命名该文件
-				newPath = destPath
-			} else {
-				// 多个源文件但目标不是目录，这是一个错误
-				return fmt.Errorf("无法将多个文件重命名为单个文件名 '%s'。请确保目标是一个目录。", destPath)
-			}
-
-			task := workerpool.Task{
-				Type:       workerpool.TaskTypeRename,
-				SourcePath: srcFile,
-				DestPath:   newPath,
-			}
-			pool.TaskChan <- task
-		}
-
-		pool.Close()
-		wg.Wait()
-		bar.Finish()
-
-		cmd.Println("\n--- 处理完成 ---")
-		cmd.Printf("总计: %d 个文件\n", totalFiles)
-		cmd.Printf("成功: %d 个文件\n", successCount)
-		cmd.Printf("失败: %d 个文件\n", failCount)
-
-		if failCount > 0 && !verbose {
-			cmd.Println("\n失败的文件列表:")
-			for _, f := range failedFiles {
-				cmd.Printf("  - %s\n", f)
-			}
-			cmd.Println("使用 -v 或 --verbose 标志查看详细错误信息。")
-		}
-
-		return nil
+		fmt.Printf("文件已成功重命名：%s -> %s\n", oldName, newName)
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(renameCmd)
+
+	// 添加参数
+	renameCmd.Flags().StringVarP(&oldName, "old", "o", "", "原文件路径/名称（必填）")
+	renameCmd.Flags().StringVarP(&newName, "new", "n", "", "新文件路径/名称（必填）")
+	renameCmd.Flags().BoolVarP(&force, "force", "f", false, "强制覆盖已存在的新文件")
+	_ = renameCmd.MarkFlagRequired("old")
+	_ = renameCmd.MarkFlagRequired("new")
+}
+
+// renameFile 核心重命名逻辑
+func renameFile() error {
+	// 检查原文件是否存在
+	oldStat, err := os.Stat(oldName)
+	if err != nil {
+		return fmt.Errorf("原文件不存在: %w", err)
+	}
+	if oldStat.IsDir() {
+		return fmt.Errorf("原路径是目录，仅支持文件重命名")
+	}
+
+	// 修复：要么使用newStat，要么直接判断错误（这里选择简化逻辑，去掉无用变量）
+	if _, err := os.Stat(newName); err == nil {
+		if !force {
+			return fmt.Errorf("新文件已存在，使用--force强制覆盖")
+		}
+		// 强制覆盖：先删除新文件
+		if err := os.Remove(newName); err != nil {
+			return fmt.Errorf("删除现有新文件失败: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("检查新文件状态失败: %w", err)
+	}
+
+	// 创建新文件所在目录（如果不存在）
+	newDir := filepath.Dir(newName)
+	if err := os.MkdirAll(newDir, 0755); err != nil {
+		return fmt.Errorf("创建新文件目录失败: %w", err)
+	}
+
+	// 执行重命名
+	if err := os.Rename(oldName, newName); err != nil {
+		return fmt.Errorf("重命名失败: %w", err)
+	}
+
+	return nil
 }

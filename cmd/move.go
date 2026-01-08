@@ -1,105 +1,91 @@
-// cmd/move.go
-
 package cmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
-	"sync"
 
-	"training-practice/internal/fileops"
-	"training-practice/internal/workerpool"
-
-	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
 
+var (
+	srcMovePath string // 源文件路径
+	dstMovePath string // 目标文件路径
+	forceMove   bool   // 强制移动（覆盖目标）
+)
+
+// moveCmd 移动文件
 var moveCmd = &cobra.Command{
-	Use:     "move <source-path> <destination-path>",
-	Aliases: []string{"mv"}, // 添加别名
-	Short:   "并发地移动文件或目录",
-	Long: `
-'move' 命令用于从源路径（可以是文件或目录）并发地移动内容到目标路径。
-它会先尝试快速重命名，如果跨设备则采用“复制+删除”的方式。`,
-	Args: cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		sourcePath := args[0]
-		destPath := args[1]
-
-		cmd.Println("正在扫描源文件...")
-		sourceFiles, err := fileops.CollectFiles(sourcePath)
-		if err != nil {
-			return fmt.Errorf("扫描源目录时出错: %w", err)
+	Use:   "move",
+	Short: "移动文件到指定路径",
+	Long:  `将源文件移动到目标路径，支持跨目录移动，可强制覆盖已存在的目标文件`,
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := moveFile(); err != nil {
+			fmt.Fprintf(os.Stderr, "移动文件失败: %v\n", err)
+			os.Exit(1)
 		}
-
-		totalFiles := len(sourceFiles)
-		if totalFiles == 0 {
-			cmd.Println("没有找到任何文件需要移动。")
-			return nil
-		}
-
-		pool := workerpool.NewWorkerPool(workerCount, totalFiles)
-
-		bar := progressbar.Default(int64(totalFiles), "正在移动...")
-
-		var wg sync.WaitGroup
-		var successCount, failCount int
-		var failedFiles []string
-		var mu sync.Mutex
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for res := range pool.ResultChan {
-				bar.Add(1)
-				mu.Lock()
-				if res.Success {
-					successCount++
-				} else {
-					failCount++
-					failedFiles = append(failedFiles, res.Task.SourcePath)
-					if verbose {
-						cmd.Printf("ERROR: %s: %v\n", res.Task.SourcePath, res.Error)
-					}
-				}
-				mu.Unlock()
-			}
-		}()
-
-		for _, srcFile := range sourceFiles {
-			relPath, _ := filepath.Rel(sourcePath, srcFile)
-			dstFile := filepath.Join(destPath, relPath)
-
-			task := workerpool.Task{
-				Type:       workerpool.TaskTypeMove,
-				SourcePath: srcFile,
-				DestPath:   dstFile,
-			}
-			pool.TaskChan <- task
-		}
-
-		pool.Close()
-		wg.Wait()
-		bar.Finish()
-
-		cmd.Println("\n--- 移动完成 ---")
-		cmd.Printf("总计: %d 个文件\n", totalFiles)
-		cmd.Printf("成功: %d 个文件\n", successCount)
-		cmd.Printf("失败: %d 个文件\n", failCount)
-
-		if failCount > 0 && !verbose {
-			cmd.Println("\n失败的文件列表:")
-			for _, f := range failedFiles {
-				cmd.Printf("  - %s\n", f)
-			}
-			cmd.Println("使用 -v 或 --verbose 标志查看详细错误信息。")
-		}
-
-		return nil
+		fmt.Printf("文件已成功移动：%s -> %s\n", srcMovePath, dstMovePath)
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(moveCmd)
-	moveCmd.Flags().BoolVarP(&overwrite, "overwrite", "o", false, "如果目标文件已存在，则强制覆盖")
+
+	// 添加参数
+	moveCmd.Flags().StringVarP(&srcMovePath, "source", "s", "", "源文件路径（必填）")
+	moveCmd.Flags().StringVarP(&dstMovePath, "dest", "d", "", "目标文件路径（必填）")
+	moveCmd.Flags().BoolVarP(&forceMove, "force", "f", false, "强制覆盖已存在的目标文件")
+	_ = moveCmd.MarkFlagRequired("source")
+	_ = moveCmd.MarkFlagRequired("dest")
+}
+
+// moveFile 核心移动逻辑
+func moveFile() error {
+	// 检查源文件是否存在
+	srcStat, err := os.Stat(srcMovePath)
+	if err != nil {
+		return fmt.Errorf("源文件不存在: %w", err)
+	}
+	if srcStat.IsDir() {
+		return fmt.Errorf("源路径是目录，仅支持文件移动")
+	}
+
+	// 检查目标文件是否已存在
+	if _, err := os.Stat(dstMovePath); err == nil {
+		if !forceMove {
+			return fmt.Errorf("目标文件已存在，使用--force强制覆盖")
+		}
+		// 强制覆盖：先删除目标文件
+		if err := os.Remove(dstMovePath); err != nil {
+			return fmt.Errorf("删除现有目标文件失败: %w", err)
+		}
+	}
+
+	// 创建目标目录（如果不存在）
+	dstDir := filepath.Dir(dstMovePath)
+	if err := os.MkdirAll(dstDir, 0755); err != nil {
+		return fmt.Errorf("创建目标目录失败: %w", err)
+	}
+
+	// 执行移动（先尝试rename，跨文件系统则复制+删除）
+	if err := os.Rename(srcMovePath, dstMovePath); err != nil {
+		// rename失败，降级为复制+删除
+		fmt.Println("跨文件系统移动，执行复制+删除...")
+		if err := copyFileWithPath(srcMovePath, dstMovePath); err != nil {
+			return fmt.Errorf("复制文件失败: %w", err)
+		}
+		if err := os.Remove(srcMovePath); err != nil {
+			return fmt.Errorf("删除源文件失败: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// copyFileWithPath 复用复制逻辑（适配move的参数）
+func copyFileWithPath(src, dst string) error {
+	srcCopyPath = src
+	dstCopyPath = dst
+	overwrite = true
+	return copyFile()
 }

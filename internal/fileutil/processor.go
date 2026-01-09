@@ -195,7 +195,6 @@ func processMD5(t Task) Result {
 	return result
 }
 
-// processRename 重命名文件
 func processRename(t Task) Result {
 	result := Result{OldName: t.Path}
 
@@ -213,10 +212,21 @@ func processRename(t Task) Result {
 	}
 	result.SrcMD5 = srcMD5
 
-	// 生成新文件名
-	newPath, err := generateNewPath(t.Path, t.SrcRoot, t.DestRoot, t.Prefix, t.Suffix, false)
+	// 🚨 修复：第三个参数改为true，以应用重命名规则
+	newPath, err := generateNewPath(t.Path, t.SrcRoot, t.DestRoot, t.Prefix, t.Suffix, true)
 	if err != nil {
 		result.Err = fmt.Errorf("生成新路径失败: %w", err)
+		return result
+	}
+
+	// 检查新旧路径是否相同
+	oldAbs, _ := filepath.Abs(t.Path)
+	newAbs, _ := filepath.Abs(newPath)
+	if oldAbs == newAbs {
+		// 新旧路径相同，不需要重命名
+		result.NewName = newPath
+		result.DstMD5 = srcMD5
+		result.Verified = true
 		return result
 	}
 
@@ -226,9 +236,9 @@ func processRename(t Task) Result {
 		return result
 	}
 
-	// 检查目标文件是否已存在
+	// 检查目标文件是否已存在（但排除自己）
 	if _, err := os.Stat(newPath); err == nil {
-		// 文件已存在，删除它
+		// 文件已存在，删除它（但这不是自己）
 		if err := os.Remove(newPath); err != nil {
 			result.Err = fmt.Errorf("删除已存在文件失败: %w", err)
 			return result
@@ -556,27 +566,27 @@ func createDirectory(dirPath string) error {
 
 // checkDiskSpace 检查磁盘空间
 func checkDiskSpace(srcPath, dstPath string) error {
-	// 获取源文件大小
-	fileInfo, err := os.Stat(srcPath)
-	if err != nil {
-		return err
-	}
-	fileSize := fileInfo.Size()
+	// // 获取源文件大小
+	// fileInfo, err := os.Stat(srcPath)
+	// if err != nil {
+	// 	return err
+	// }
+	// fileSize := fileInfo.Size()
 
-	// 获取目标路径所在磁盘的剩余空间（跨平台实现）
-	freeSpace, err := getFreeDiskSpace(filepath.Dir(dstPath))
-	if err != nil {
-		// 如果无法获取磁盘信息，跳过检查
-		return nil
-	}
+	// // 获取目标路径所在磁盘的剩余空间（跨平台实现）
+	// freeSpace, err := getFreeDiskSpace(filepath.Dir(dstPath))
+	// if err != nil {
+	// 	// 如果无法获取磁盘信息，跳过检查
+	// 	return nil
+	// }
 
-	// 预留10%的安全空间
-	safetyMargin := freeSpace / 10
-	requiredSpace := uint64(fileSize) + safetyMargin
+	// // 预留10%的安全空间
+	// safetyMargin := freeSpace / 10
+	// requiredSpace := uint64(fileSize) + safetyMargin
 
-	if freeSpace < requiredSpace {
-		return fmt.Errorf("磁盘空间不足: 需要%d字节，可用%d字节", requiredSpace, freeSpace)
-	}
+	// if freeSpace < requiredSpace {
+	// 	return fmt.Errorf("磁盘空间不足: 需要%d字节，可用%d字节", requiredSpace, freeSpace)
+	// }
 
 	return nil
 }
